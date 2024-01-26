@@ -1,13 +1,16 @@
 
+use std::fmt::format;
+
+use actix_web::web::Payload;
 use uuid::Uuid;
-use crate::model::Todo;
+use crate::model::{Todo, UpdateTodoSchema};
 
 use crate::{
     model::{AppState, QueryOptions},
     response::{GenericResponse, SingleTodoResponse, TodoData, TodoListResponse},
 };
 
-use actix_web::{delete, get, post, web, HttpResponse, Responder};
+use actix_web::{body, delete, get, http, patch, post, web, HttpResponse, Responder};
 use chrono::prelude::*;
 
 #[get("/book")]
@@ -80,7 +83,83 @@ async fn create_todo_handler(
 }
 
 // get id
-// edit
+#[get("/todos/{id}")]
+async fn get_todo_handler(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder{
+    let vec = data.todo_db.lock().unwrap();
+
+    let id = path.into_inner();
+    let todo = vec.iter().find(|todo| todo.id == Some(id.to_owned()));
+
+    if todo.is_none(){
+        let error_response = GenericResponse{
+            status: "fail".to_string(),
+            message: format!("Todo with ID: {} not found", id),
+        };
+        return HttpResponse::NotFound().json(error_response);
+    }
+
+    let todo = todo.unwrap();
+    let json_response = SingleTodoResponse{
+        status: "Success".to_string(),
+        data: TodoData{ todo: todo.clone() },
+    };
+
+    HttpResponse::Ok().json(json_response)
+}
+
+
+#[patch("/todos/{id}")]
+async fn edit_todo_handler(
+    path: web::Path<String>,
+    body: web::Json<UpdateTodoSchema>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let mut vec = data.todo_db.lock().unwrap();
+
+    let id = path.into_inner();
+    let todo = vec.iter_mut().find(|todo| todo.id == Some(id.to_owned()));
+
+    if todo.is_none() {
+        let error_response = GenericResponse {
+            status: "fail".to_string(),
+            message: format!("Todo with ID: {} not found", id),
+        };
+        return HttpResponse::NotFound().json(error_response);
+    }
+
+    let todo = todo.unwrap();
+    let datetime = Utc::now();
+    let title = body.title.to_owned().unwrap_or(todo.title.to_owned());
+    let content = body.content.to_owned().unwrap_or(todo.content.to_owned());
+    let payload = Todo {
+        id: todo.id.to_owned(),
+        title: if !title.is_empty() {
+            title
+        } else {
+            todo.title.to_owned()
+        },
+        content: if !content.is_empty() {
+            content
+        } else {
+            todo.content.to_owned()
+        },
+        completed: if body.completed.is_some() {
+            body.completed
+        } else {
+            todo.completed
+        },
+        createdAt: todo.createdAt,
+        updatedAt: Some(datetime),
+    };
+    *todo = payload;
+
+    let json_response = SingleTodoResponse {
+        status: "success".to_string(),
+        data: TodoData { todo: todo.clone() },
+    };
+
+    HttpResponse::Ok().json(json_response)
+}
 
 #[delete("/todos/{id}")]
 async fn delete_todo_handler(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder{
@@ -106,6 +185,8 @@ pub fn config(conf: &mut web::ServiceConfig){
         .service(book_handler)
         .service(todos_list_handler)
         .service(create_todo_handler)
+        .service(get_todo_handler)
+        .service(edit_todo_handler)
         .service(delete_todo_handler);
 
     conf.service(scope);
